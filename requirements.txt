@@ -1,0 +1,4 @@
+tkcalendar>=1.6.1
+pillow>=9.0.0
+pystray>=0.19.4
+win10toast>=0.9
