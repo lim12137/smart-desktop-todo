@@ -1,4 +1,13 @@
+# 客户端依赖
 tkcalendar>=1.6.1
 pillow>=9.0.0
 pystray>=0.19.4
 win10toast>=0.9
+
+# 服务端依赖
+Flask>=2.0.0
+Flask-Cors>=3.0.0
+PyJWT>=2.0.0
+
+# 共享依赖
+requests>=2.25.0

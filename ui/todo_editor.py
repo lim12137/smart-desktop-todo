@@ -9,7 +9,10 @@ from tkinter import ttk, messagebox
 from datetime import datetime, date, timedelta
 from tkcalendar import DateEntry
 from core.models import TodoItem, Priority, Status
-from ui.styles import COLORS, FONTS, STATUS_OPTIONS, PRIORITY_OPTIONS
+from ui.styles import COLORS, FONTS, STATUS_OPTIONS, PRIORITY_OPTIONS, PRIORITY_NAMES
+
+# 反向映射：中文优先级 -> 数字
+_PRIORITY_TO_NUM = {v: k for k, v in PRIORITY_NAMES.items()}
 
 
 class TodoEditor(tk.Toplevel):
@@ -22,6 +25,9 @@ class TodoEditor(tk.Toplevel):
         self.callback = callback
         self.result = None
         
+        # 先隐藏窗口，防止闪烁
+        self.withdraw()
+        
         self._setup_window()
         self._create_widgets()
         self._load_data()
@@ -29,19 +35,14 @@ class TodoEditor(tk.Toplevel):
         # 模态对话框
         self.transient(parent)
         self.grab_set()
-        self.focus_set()
         
-        # 先隐藏窗口
-        self.withdraw()
+        # 计算位置并显示
+        self._center_window()
         
-        # 计算位置
-        self.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
-        self.geometry(f"+{x}+{y}")
-        
-        # 一次性显示窗口
+        # 显示窗口
         self.deiconify()
+        self.focus_set()
+        self.title_entry.focus_set()
     
     def _setup_window(self):
         """设置窗口"""
@@ -159,18 +160,19 @@ class TodoEditor(tk.Toplevel):
         if self.todo:
             self.title_var.set(self.todo.title)
             self.assignee_var.set(self.todo.assignee)
-            
+
+            # 保存原始截止时间用于比较
+            self._old_deadline = self.todo.deadline
+
             if self.todo.deadline:
                 self.deadline_var.set(self.todo.deadline)
                 self.no_deadline_var.set(False)
             else:
                 self.no_deadline_var.set(True)
                 self._toggle_deadline()
-            
-            # 优先级
-            priority_map = {1: "低", 2: "中", 3: "高", 4: "紧急"}
-            self.priority_var.set(priority_map.get(self.todo.priority, "中"))
-            
+
+            self.priority_var.set(PRIORITY_NAMES.get(self.todo.priority, "中"))
+
             self.status_var.set(self.todo.status)
             self.desc_text.insert("1.0", self.todo.description)
         else:
@@ -191,9 +193,7 @@ class TodoEditor(tk.Toplevel):
         if not self.no_deadline_var.get():
             deadline = self.deadline_var.get()
         
-        # 优先级映射
-        priority_map = {"低": 1, "中": 2, "高": 3, "紧急": 4}
-        priority = priority_map.get(self.priority_var.get(), 2)
+        priority = _PRIORITY_TO_NUM.get(self.priority_var.get(), 2)
         
         if self.todo:
             # 更新
@@ -205,9 +205,11 @@ class TodoEditor(tk.Toplevel):
             self.todo.description = self.desc_text.get("1.0", tk.END).strip()
             
             # 如果截止时间改变，重置提醒标记
-            self.todo.reminded_7day = False
-            self.todo.reminded_3day = False
-            self.todo.reminded_overdue = False
+            old_deadline = getattr(self, '_old_deadline', None)
+            if old_deadline != deadline:
+                self.todo.reminded_7day = False
+                self.todo.reminded_3day = False
+                self.todo.reminded_overdue = False
             
             self.result = self.todo
         else:
@@ -225,3 +227,31 @@ class TodoEditor(tk.Toplevel):
             self.callback(self.result)
         
         self.destroy()
+    
+    def _center_window(self):
+        """居中显示窗口"""
+        # 更新窗口以获取正确尺寸
+        self.update_idletasks()
+        
+        # 获取窗口尺寸
+        width = self.winfo_reqwidth()
+        height = self.winfo_reqheight()
+        
+        # 获取父窗口位置和尺寸
+        parent_x = self.parent.winfo_rootx()
+        parent_y = self.parent.winfo_rooty()
+        parent_width = self.parent.winfo_width()
+        parent_height = self.parent.winfo_height()
+        
+        # 计算居中位置
+        x = parent_x + (parent_width - width) // 2
+        y = parent_y + (parent_height - height) // 2
+        
+        # 确保不超出屏幕
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x = max(0, min(x, screen_width - width))
+        y = max(0, min(y, screen_height - height))
+        
+        # 直接设置位置
+        self.geometry(f"{width}x{height}+{x}+{y}")

@@ -44,7 +44,7 @@ COLUMNS = {
     "title": {"text": "事项", "width": 200, "anchor": "w"},
     "assignee": {"text": "责任人", "width": 80, "anchor": "center"},
     "deadline": {"text": "截止时间", "width": 100, "anchor": "center"},
-    "days_left": {"text": "剩余天数", "width": 80, "anchor": "center"},
+    "progress": {"text": "进度更新", "width": 120, "anchor": "w"},
     "status": {"text": "状态", "width": 80, "anchor": "center"},
     "priority": {"text": "优先级", "width": 70, "anchor": "center"},
 }

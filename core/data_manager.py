@@ -45,7 +45,7 @@ class DataManager:
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     self._config = json.load(f)
-            except:
+            except Exception:
                 self._config = self._default_config()
         else:
             self._config = self._default_config()
@@ -61,19 +61,42 @@ class DataManager:
             "always_on_top": False,
             "auto_start": False,
             "reminder_enabled": True,
-            "reminder_interval": 60  # 检查间隔(秒)
+            "reminder_interval": 60,  # 检查间隔(秒)
+            "warning_days": 7,        # 警告提醒天数
+            "urgent_days": 3,         # 紧急提醒天数
+            "auto_show_on_reminder": True,  # 收到提醒时自动显示主窗口
+            "check_on_start": True,         # 启动时检查
+            "sound_enabled": True,          # 提示音
+            "toast_enabled": True,          # Toast通知
+            "popup_enabled": True,          # 弹出窗口
+            "remind_7day_enabled": True,     # 7天提醒
+            "remind_3day_enabled": True,     # 3天提醒
+            "remind_overdue_enabled": True,  # 逾期提醒
+            "repeat_reminder": False,        # 重复提醒
+            "repeat_interval": 30,           # 重复提醒间隔(分钟)
         }
     
     def save(self):
         """保存数据"""
+        self.save_todos()
+        self.save_config()
+
+    def save_todos(self):
+        """保存待办事项"""
         try:
             with open(self.data_file, 'w', encoding='utf-8') as f:
-                json.dump([item.to_dict() for item in self._todos], f, 
+                json.dump([item.to_dict() for item in self._todos], f,
                          ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"保存待办数据失败: {e}")
+
+    def save_config(self):
+        """保存配置"""
+        try:
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self._config, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"保存数据失败: {e}")
+            print(f"保存配置失败: {e}")
     
     def get_all_todos(self) -> List[TodoItem]:
         """获取所有待办事项"""
@@ -88,7 +111,7 @@ class DataManager:
     def add_todo(self, todo: TodoItem) -> bool:
         """添加待办事项"""
         self._todos.append(todo)
-        self.save()
+        self.save_todos()
         return True
     
     def update_todo(self, todo_id: str, **kwargs) -> bool:
@@ -98,7 +121,7 @@ class DataManager:
                 for key, value in kwargs.items():
                     if hasattr(todo, key):
                         setattr(todo, key, value)
-                self.save()
+                self.save_todos()
                 return True
         return False
     
@@ -107,7 +130,7 @@ class DataManager:
         for i, todo in enumerate(self._todos):
             if todo.id == todo_id:
                 del self._todos[i]
-                self.save()
+                self.save_todos()
                 return True
         return False
     
@@ -125,7 +148,7 @@ class DataManager:
     def set_config(self, key: str, value):
         """设置配置"""
         self._config[key] = value
-        self.save()
+        self.save_config()
     
     def mark_reminded(self, todo_id: str, remind_type: str):
         """标记已提醒"""
@@ -137,4 +160,4 @@ class DataManager:
                 todo.reminded_3day = True
             elif remind_type == "overdue":
                 todo.reminded_overdue = True
-            self.save()
+            self.save_todos()

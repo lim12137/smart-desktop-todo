@@ -7,7 +7,6 @@ __pycache__/
 *.egg
 dist/
 build/
-*.spec
 
 # IDE
 .vscode/
@@ -22,6 +21,11 @@ Desktop.ini
 
 # Tools
 .gstack/
+.claude/
+
+# Local only
+network-management-todo/
+todo_reminder/
 
 # Logs
 *.log
