@@ -67,10 +67,8 @@ class UserManagementDialog(tk.Toplevel):
         vsb = ttk.Scrollbar(main, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
 
-        self.tree.grid(row=0, column=0, sticky=tk.NSEW)
-        vsb.grid(row=0, column=1, sticky=tk.NS)
-        main.columnconfigure(0, weight=1)
-        main.rowconfigure(0, weight=1)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
 
         # 状态栏
         self.status_label = ttk.Label(self, text="就绪", font=FONTS["small"], padding=5)
