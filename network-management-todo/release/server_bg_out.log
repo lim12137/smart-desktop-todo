@@ -1,9 +1,0 @@
-初始化数据库: C:\Users\hopemyl\Downloads\smart-desktop-todo\components\project\todo_reminder\server\data\todo_reminder.db
-[OK] 管理员账户已存在
-============================================================
-待办事项提醒系统 - 服务端启动
-============================================================
-数据库: C:\Users\hopemyl\Downloads\smart-desktop-todo\components\project\todo_reminder\server\data\todo_reminder.db
-============================================================
- * Serving Flask app 'app'
- * Debug mode: off
