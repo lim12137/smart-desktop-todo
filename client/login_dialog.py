@@ -40,6 +40,7 @@ class LoginDialog(tk.Toplevel):
         self.deiconify()
         self.focus_set()
         self.username_entry.focus_set()
+        self.wait_window()
 
     def _setup_window(self):
         """设置窗口"""

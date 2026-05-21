@@ -32,6 +32,7 @@ class ConnectDialog(tk.Toplevel):
         self._center_window()
         self.deiconify()
         self.focus_set()
+        self.wait_window()
 
     def _setup_window(self):
         self.title("连接 - 待办事项提醒")
