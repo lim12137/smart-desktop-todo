@@ -131,12 +131,20 @@ jobs:
 
                           // Decode the embedded payload
                           var asm = Assembly.GetExecutingAssembly();
-                          var resName = asm.GetName().Name + ".payload.b64";
-                          using (var stream = asm.GetManifestResourceStream(resName))
+                          var resName = Array.Find(
+                              asm.GetManifestResourceNames(),
+                              name => name.EndsWith("payload.b64", StringComparison.OrdinalIgnoreCase)
+                          );
+                          using (var stream = resName == null ? null : asm.GetManifestResourceStream(resName))
                           {
                               if (stream == null)
                               {
                                   Console.WriteLine("[ERROR] Embedded payload not found!");
+                                  Console.WriteLine("Available resources:");
+                                  foreach (var name in asm.GetManifestResourceNames())
+                                  {
+                                      Console.WriteLine("  - " + name);
+                                  }
                                   Console.ReadKey();
                                   return;
                               }
@@ -231,6 +239,7 @@ jobs:
               <OutputType>Exe</OutputType>
               <TargetFramework>net8.0</TargetFramework>
               <AssemblyName>claude-code-updater</AssemblyName>
+              <RootNamespace>ClaudeUpdater</RootNamespace>
               <PublishSingleFile>true</PublishSingleFile>
               <SelfContained>true</SelfContained>
               <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
@@ -238,7 +247,7 @@ jobs:
               <RuntimeIdentifier>win-x64</RuntimeIdentifier>
             </PropertyGroup>
             <ItemGroup>
-              <EmbeddedResource Include="resources\payload.b64" />
+              <EmbeddedResource Include="resources\payload.b64" LogicalName="payload.b64" />
             </ItemGroup>
           </Project>
           "@
