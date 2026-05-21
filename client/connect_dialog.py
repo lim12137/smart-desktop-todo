@@ -133,20 +133,29 @@ class ConnectDialog(tk.Toplevel):
 
     def _start_discovery(self):
         saved = load_saved_config()
+        self._server_info = {}
+        self._discovery_done = False
 
         def do_discover():
             servers = discover_servers(timeout=3)
             urls = []
-            self._server_info = {}
             for key, info in servers.items():
                 url = f"http://{info['ip']}:{info['port']}"
                 urls.append(f"{info['name']} ({info['ip']}:{info['port']})")
                 self._server_info[urls[-1]] = url
+            self._discovery_urls = urls
+            self._discovery_saved = saved
+            self._discovery_done = True
 
-            self.after(0, lambda: self._on_discovery_done(urls, saved))
-
-        self._server_info = {}
         threading.Thread(target=do_discover, daemon=True).start()
+        self._poll_discovery()
+
+    def _poll_discovery(self):
+        """在主线程轮询 discovery 结果"""
+        if self._discovery_done:
+            self._on_discovery_done(self._discovery_urls, self._discovery_saved)
+        else:
+            self.after(200, self._poll_discovery)
 
     def _on_discovery_done(self, urls, saved):
         if urls:
