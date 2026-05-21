@@ -235,6 +235,7 @@ jobs:
               <SelfContained>false</SelfContained>
               <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
               <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+              <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
               <RuntimeIdentifier>win-x64</RuntimeIdentifier>
             </PropertyGroup>
             <ItemGroup>
