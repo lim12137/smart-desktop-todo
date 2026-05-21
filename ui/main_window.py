@@ -225,12 +225,23 @@ class TodoApp:
 
         ttk.Separator(left_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=10, fill=tk.Y)
 
+        # 成员管理按钮（仅C/S模式管理员可见，初始隐藏）
+        self.user_mgmt_btn = ttk.Button(
+            left_frame,
+            text="👥 成员",
+            style="Action.TButton",
+            command=self._open_user_management
+        )
+
         ttk.Button(
             left_frame,
             text="⚙️ 设置",
             style="Action.TButton",
             command=self._open_settings
         ).pack(side=tk.LEFT, padx=2)
+
+        # C/S 管理员模式显示成员管理按钮
+        self._show_admin_controls()
         
         # 右侧控件
         right_frame = ttk.Frame(toolbar)
@@ -572,6 +583,17 @@ class TodoApp:
         topmost = self.topmost_var.get()
         self.root.attributes('-topmost', topmost)
         self.data_manager.set_config("always_on_top", topmost)
+
+    def _show_admin_controls(self):
+        """C/S 管理员模式下显示成员管理按钮"""
+        user = getattr(self.data_manager, 'get_current_user', lambda: None)()
+        if user and user.get('role') == 'admin':
+            self.user_mgmt_btn.pack(side=tk.LEFT, padx=2)
+
+    def _open_user_management(self):
+        """打开成员管理"""
+        from ui.user_management_dialog import UserManagementDialog
+        UserManagementDialog(self.root, self.data_manager)
 
     def _open_settings(self):
         """打开设置"""
