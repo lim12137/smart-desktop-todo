@@ -61,97 +61,194 @@ jobs:
             }
           }
 
-      - name: Build SFX updater exe
+      - name: Build self-extracting exe
         if: env.SKIP_BUILD == 'false'
         shell: pwsh
         run: |
-          # Install 7-Zip
-          choco install 7zip -y --no-progress
-          $sevenZip = "C:\Program Files\7-Zip\7z.exe"
-
-          # Download 7-Zip SFX module
-          Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2301-extra.7z" -OutFile 7z-extra.7z
-          & $sevenZip x 7z-extra.7z -o7z-extra -y
-
-          # List extracted files to find the correct SFX module
-          Write-Host "Files in 7z-extra:"
-          Get-ChildItem -Path 7z-extra -Recurse | ForEach-Object { Write-Host "  $($_.FullName)" }
-
-          # Find SFX module - prefer 7z.sfx, fallback to first .sfx found
-          $sfxModule = Get-ChildItem -Path 7z-extra -Filter "*.sfx" | Select-Object -First 1
-          if (-not $sfxModule) { Write-Error "No .sfx file found in 7z-extra!"; exit 1 }
-          Write-Host "Using SFX module: $($sfxModule.FullName)"
-
           # Create staging dir
           New-Item -ItemType Directory -Path staging -Force
 
           # Extract claude exe from zip
           Expand-Archive -Path claude-win32-x64.zip -DestinationPath staging -Force
+          Write-Host "Extracted files:"
+          Get-ChildItem staging | ForEach-Object { Write-Host "  $($_.Name) ($([math]::Round($_.Length/1MB,1)) MB)" }
 
-          # Create install.bat
-          $batContent = @'
-          @echo off
-          setlocal enabledelayedexpansion
-          title Claude Code Offline Updater
-          echo ============================================
-          echo   Claude Code Offline Updater
-          echo ============================================
-          echo.
-          set "INSTALL_DIR=%USERPROFILE%\.local\bin"
-          if not "%~1"=="" set "INSTALL_DIR=%~1"
-          echo Install to: %INSTALL_DIR%
-          echo.
-          tasklist /FI "IMAGENAME eq claude.exe" 2>NUL | find /I "claude.exe" >NUL
-          if !errorlevel! equ 0 (
-              echo Stopping running claude.exe ...
-              taskkill /F /IM claude.exe >NUL 2>&1
-              timeout /t 2 /nobreak >NUL
-          )
-          if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
-          if exist "%INSTALL_DIR%\claude.exe" (
-              echo Backing up old version...
-              copy /Y "%INSTALL_DIR%\claude.exe" "%INSTALL_DIR%\claude.exe.bak" >NUL
-          )
-          echo Installing new version...
-          copy /Y "%~dp0claude.exe" "%INSTALL_DIR%\claude.exe" >NUL 2>&1
-          if !errorlevel! neq 0 (
-              echo ERROR: Copy failed! Restoring backup...
-              if exist "%INSTALL_DIR%\claude.exe.bak" copy /Y "%INSTALL_DIR%\claude.exe.bak" "%INSTALL_DIR%\claude.exe" >NUL
-              pause
-              exit /b 1
-          )
-          echo.
-          if exist "%INSTALL_DIR%\claude.exe" (
-              echo ============================================
-              for /f "tokens=*" %%v in ('"%INSTALL_DIR%\claude.exe" --version 2^>NUL') do set "VER=%%v"
-              echo   Success! Version: !VER!
-              echo   Path: %INSTALL_DIR%\claude.exe
-              echo ============================================
-          ) else (
-              echo ERROR: claude.exe not found after install
-          )
-          echo.
-          pause
-          '@
-          Set-Content -Path staging\install.bat -Value $batContent -Encoding ASCII
+          # Compress staging into a zip for embedding
+          Compress-Archive -Path staging\* -DestinationPath payload.zip -Force
 
-          # Create SFX config
-          $sfxConfig = @"
-          ;!@Install@!UTF-8!
-          Title="Claude Code $env:LATEST_VERSION Offline Updater"
-          BeginPrompt="Update Claude Code to $env:LATEST_VERSION ?"
-          RunProgram="install.bat"
-          ;!@InstallEnd@!
+          # Read the zip as base64 for embedding
+          $zipBytes = [System.IO.File]::ReadAllBytes("payload.zip")
+          $b64 = [Convert]::ToBase64String($zipBytes)
+          $ver = $env:LATEST_VERSION
+          Write-Host "Payload size: $([math]::Round($zipBytes.Length/1MB,1)) MB, base64 length: $($b64.Length)"
+
+          # Write C# installer source
+          $installerCs = @"
+          using System;
+          using System.IO;
+          using System.IO.Compression;
+          using System.Diagnostics;
+          using System.Reflection;
+          using System.Text;
+
+          [assembly: AssemblyTitle("Claude Code Updater v$ver")]
+          [assembly: AssemblyProduct("Claude Code Offline Updater")]
+          [assembly: AssemblyVersion("$ver.0")]
+
+          namespace ClaudeUpdater
+          {
+              class Program
+              {
+                  static void Main(string[] args)
+                  {
+                      var installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin");
+                      if (args.Length > 0) installDir = args[0];
+
+                      Console.WriteLine("============================================");
+                      Console.WriteLine("  Claude Code $ver Offline Updater");
+                      Console.WriteLine("============================================");
+                      Console.WriteLine();
+                      Console.WriteLine("Install to: " + installDir);
+                      Console.WriteLine();
+
+                      // Kill running claude
+                      try
+                      {
+                          foreach (var proc in Process.GetProcessesByName("claude"))
+                          {
+                              Console.WriteLine("Stopping claude.exe (PID " + proc.Id + ")...");
+                              proc.Kill();
+                              proc.WaitForExit(3000);
+                          }
+                      }
+                      catch { }
+
+                      // Extract embedded zip
+                      string tempDir = Path.Combine(Path.GetTempPath(), "claude_update_" + Process.GetCurrentProcess().Id);
+                      try
+                      {
+                          Directory.CreateDirectory(tempDir);
+
+                          // Decode the embedded payload
+                          var asm = Assembly.GetExecutingAssembly();
+                          var resName = asm.GetName().Name + ".payload.b64";
+                          using (var stream = asm.GetManifestResourceStream(resName))
+                          {
+                              if (stream == null)
+                              {
+                                  Console.WriteLine("[ERROR] Embedded payload not found!");
+                                  Console.ReadKey();
+                                  return;
+                              }
+                              using (var reader = new StreamReader(stream, Encoding.ASCII))
+                              {
+                                  string b64 = reader.ReadToEnd();
+                                  byte[] zipBytes = Convert.FromBase64String(b64);
+                                  string zipPath = Path.Combine(tempDir, "payload.zip");
+                                  File.WriteAllBytes(zipPath, zipBytes);
+                                  ZipFile.ExtractToDirectory(zipPath, tempDir);
+                              }
+                          }
+
+                          // Ensure install dir exists
+                          Directory.CreateDirectory(installDir);
+
+                          // Backup old version
+                          string exePath = Path.Combine(installDir, "claude.exe");
+                          if (File.Exists(exePath))
+                          {
+                              Console.WriteLine("Backing up old version...");
+                              File.Copy(exePath, exePath + ".bak", true);
+                          }
+
+                          // Copy new exe
+                          Console.WriteLine("Installing new version...");
+                          string srcExe = Path.Combine(tempDir, "claude.exe");
+                          if (!File.Exists(srcExe))
+                          {
+                              Console.WriteLine("[ERROR] claude.exe not found in package!");
+                              Console.ReadKey();
+                              return;
+                          }
+                          File.Copy(srcExe, exePath, true);
+
+                          // Verify
+                          if (File.Exists(exePath))
+                          {
+                              Console.WriteLine();
+                              Console.WriteLine("============================================");
+                              try
+                              {
+                                  var p = Process.Start(new ProcessStartInfo(exePath, "--version") { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true });
+                                  string v = p.StandardOutput.ReadLine() ?? "";
+                                  p.WaitForExit(5000);
+                                  Console.WriteLine("  Success! " + v);
+                              }
+                              catch
+                              {
+                                  Console.WriteLine("  Installed successfully!");
+                              }
+                              Console.WriteLine("  Path: " + exePath);
+                              Console.WriteLine("============================================");
+                          }
+                      }
+                      catch (Exception ex)
+                      {
+                          Console.WriteLine("[ERROR] " + ex.Message);
+                          // Try restore backup
+                          string exePath = Path.Combine(installDir, "claude.exe");
+                          string bakPath = exePath + ".bak";
+                          if (File.Exists(bakPath))
+                          {
+                              Console.WriteLine("Restoring backup...");
+                              File.Copy(bakPath, exePath, true);
+                          }
+                      }
+                      finally
+                      {
+                          // Cleanup
+                          try { Directory.Delete(tempDir, true); } catch { }
+                      }
+
+                      Console.WriteLine();
+                      Console.WriteLine("Press any key to exit...");
+                      Console.ReadKey();
+                  }
+              }
+          }
           "@
-          Set-Content -Path sfx_config.txt -Value $sfxConfig -Encoding ASCII
 
-          # Build 7z archive
-          & $sevenZip a -t7z payload.7z .\staging\* -mx5
+          Set-Content -Path installer.cs -Value $installerCs -Encoding UTF8
 
-          # Combine SFX module + config + archive into exe
-          $output = "claude-code-${env:LATEST_VERSION}-win-x64-updater.exe"
-          $bytes = [System.IO.File]::ReadAllBytes($sfxModule.FullName) + [System.IO.File]::ReadAllBytes("sfx_config.txt") + [System.IO.File]::ReadAllBytes("payload.7z")
-          [System.IO.File]::WriteAllBytes($output, $bytes)
+          # Write base64 payload as embedded resource
+          New-Item -ItemType Directory -Path resources -Force
+          Set-Content -Path "resources\payload.b64" -Value $b64 -Encoding ASCII -NoNewline
+
+          # Create csproj for single-file exe
+          $csproj = @"
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net8.0</TargetFramework>
+              <AssemblyName>claude-code-updater</AssemblyName>
+              <PublishSingleFile>true</PublishSingleFile>
+              <SelfContained>false</SelfContained>
+              <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+              <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+              <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+            </PropertyGroup>
+            <ItemGroup>
+              <EmbeddedResource Include="resources\payload.b64" />
+            </ItemGroup>
+          </Project>
+          "@
+          Set-Content -Path updater.csproj -Value $csproj -Encoding UTF8
+
+          # Publish single-file exe
+          dotnet publish updater.csproj -c Release -r win-x64 -o publish /p:PublishSingleFile=true /p:SelfContained=false
+
+          $output = "claude-code-${ver}-win-x64-updater.exe"
+          Copy-Item "publish\claude-code-updater.exe" $output
 
           $size = (Get-Item $output).Length / 1MB
           Write-Host "Built: $output ($([math]::Round($size,1)) MB)"
@@ -172,8 +269,10 @@ jobs:
           ### Usage
           1. Download ``claude-code-${env:LATEST_VERSION}-win-x64-updater.exe``
           2. Double-click to run
-          3. Confirm the prompt - update completes automatically
+          3. Update completes automatically
           4. Installed to ``%USERPROFILE%\.local\bin\claude.exe``
+
+          Requires .NET 8.0 runtime (usually pre-installed on Windows).
 
           ### Contents
           - claude.exe v${env:LATEST_VERSION} (SHA256 verified)
