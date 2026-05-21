@@ -62,14 +62,31 @@ def connect():
     """客户端连接 - 通过IP自动识别身份"""
     client_ip = get_client_ip()
     data = request.get_json(silent=True) or {}
-    # 客户端也可以主动上报自己的IP（供服务端记录）
     reported_ip = data.get('ip_address', client_ip)
 
     with get_db() as conn:
+        # 先按 IP 查找
         user = conn.execute(
             "SELECT * FROM users WHERE ip_address = ?",
             (client_ip,)
         ).fetchone()
+
+        # IP 没匹配到，检查是否有管理员（管理员不绑定 IP）
+        if not user:
+            admin = conn.execute(
+                "SELECT * FROM users WHERE role = 'admin' LIMIT 1"
+            ).fetchone()
+            if admin:
+                return jsonify({
+                    'success': True,
+                    'needs_password': True,
+                    'user': {
+                        'id': admin['id'],
+                        'username': admin['username'],
+                        'display_name': admin['display_name'],
+                        'role': admin['role']
+                    }
+                })
 
         if not user:
             return jsonify({
@@ -116,16 +133,13 @@ def login():
     if not password:
         return jsonify({'success': False, 'message': '请输入密码'}), 400
 
-    client_ip = get_client_ip()
-
     with get_db() as conn:
         user = conn.execute(
-            "SELECT * FROM users WHERE ip_address = ? AND role = 'admin'",
-            (client_ip,)
+            "SELECT * FROM users WHERE role = 'admin' LIMIT 1"
         ).fetchone()
 
         if not user:
-            return jsonify({'success': False, 'message': '非管理员IP'}), 403
+            return jsonify({'success': False, 'message': '无管理员账户'}), 403
 
         if user['password_hash'] != hash_password(password):
             return jsonify({'success': False, 'message': '密码错误'}), 401
@@ -138,8 +152,7 @@ def login():
                 'id': user['id'],
                 'username': user['username'],
                 'display_name': user['display_name'],
-                'role': user['role'],
-                'ip_address': client_ip
+                'role': user['role']
             }
         })
 
