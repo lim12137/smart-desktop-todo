@@ -232,8 +232,7 @@ jobs:
               <TargetFramework>net8.0</TargetFramework>
               <AssemblyName>claude-code-updater</AssemblyName>
               <PublishSingleFile>true</PublishSingleFile>
-              <SelfContained>false</SelfContained>
-              <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+              <SelfContained>true</SelfContained>
               <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
               <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
               <RuntimeIdentifier>win-x64</RuntimeIdentifier>
