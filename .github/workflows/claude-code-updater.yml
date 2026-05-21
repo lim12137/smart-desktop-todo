@@ -2,56 +2,54 @@ name: Build Claude Code Offline Updater
 
 on:
   schedule:
-    - cron: '0 2 * * *'   # 每天 UTC 02:00 自动检查
-  workflow_dispatch:        # 支持手动触发
+    - cron: '0 2 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
     permissions:
-      contents: write       # 用于上传 release assets
+      contents: write
 
     steps:
       - name: Check latest version
         shell: pwsh
         run: |
           $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/anthropics/claude-code/releases/latest' -Headers @{ 'User-Agent' = 'claude-updater' }
-          $latestTag = $release.tag_name   # e.g. v2.1.146
+          $latestTag = $release.tag_name
           $latestVer = $latestTag.TrimStart('v')
-          echo "LATEST_VERSION=$latestVer" >> $env:GITHUB_ENV
-          echo "LATEST_TAG=$latestTag" >> $env:GITHUB_ENV
+          "LATEST_VERSION=$latestVer" >> $env:GITHUB_ENV
+          "LATEST_TAG=$latestTag" >> $env:GITHUB_ENV
 
-          # 找到 win32-x64 资产和 SHASUMS
           $winAsset = $release.assets | Where-Object { $_.name -eq 'claude-win32-x64.zip' }
           $sumsAsset = $release.assets | Where-Object { $_.name -eq 'SHASUMS256.txt' }
 
-          if (-not $winAsset) { Write-Error "claude-win32-x64.zip not found in release $latestTag"; exit 1 }
+          if (-not $winAsset) { Write-Error "claude-win32-x64.zip not found"; exit 1 }
 
-          echo "WIN_URL=$($winAsset.browser_download_url)" >> $env:GITHUB_ENV
-          echo "SUMS_URL=$($sumsAsset.browser_download_url)" >> $env:GITHUB_ENV
+          "WIN_URL=$($winAsset.browser_download_url)" >> $env:GITHUB_ENV
+          "SUMS_URL=$($sumsAsset.browser_download_url)" >> $env:GITHUB_ENV
           Write-Host "Latest version: $latestVer"
 
-      - name: Check if updater already exists for this version
+      - name: Check if updater already exists
         shell: pwsh
         run: |
           $headers = @{ 'User-Agent' = 'claude-updater' }
           try {
-            $check = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/v${env:LATEST_VERSION}-updater" -Headers $headers -ErrorAction Stop
-            Write-Host "Updater for v${env:LATEST_VERSION} already exists, skipping build."
-            echo "SKIP_BUILD=true" >> $env:GITHUB_ENV
+            Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/v${env:LATEST_VERSION}-updater" -Headers $headers -ErrorAction Stop | Out-Null
+            Write-Host "Updater for v${env:LATEST_VERSION} already exists, skipping."
+            "SKIP_BUILD=true" >> $env:GITHUB_ENV
           } catch {
-            Write-Host "No existing updater found, will build."
-            echo "SKIP_BUILD=false" >> $env:GITHUB_ENV
+            Write-Host "No existing updater, will build."
+            "SKIP_BUILD=false" >> $env:GITHUB_ENV
           }
 
-      - name: Download claude-win32-x64.zip
+      - name: Download and verify
         if: env.SKIP_BUILD == 'false'
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri $env:WIN_URL -OutFile claude-win32-x64.zip
           if ($env:SUMS_URL) {
             Invoke-WebRequest -Uri $env:SUMS_URL -OutFile SHASUMS256.txt
-            # 验证 sha256
             $expectedLine = Get-Content SHASUMS256.txt | Where-Object { $_ -match 'claude-win32-x64.zip$' }
             if ($expectedLine) {
               $expectedHash = ($expectedLine -split '\s+')[0].ToLower()
@@ -63,145 +61,96 @@ jobs:
             }
           }
 
-      - name: Create installer script
+      - name: Build SFX updater exe
         if: env.SKIP_BUILD == 'false'
         shell: pwsh
         run: |
-          @'
+          # Install 7-Zip
+          choco install 7zip -y --no-progress
+          $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+
+          # Download 7-Zip SFX module
+          Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2301-extra.7z" -OutFile 7z-extra.7z
+          & $sevenZip x 7z-extra.7z -o7z-extra -y
+
+          # Create staging dir
+          New-Item -ItemType Directory -Path staging -Force
+
+          # Extract claude exe from zip so we can bundle it directly
+          Expand-Archive -Path claude-win32-x64.zip -DestinationPath staging -Force
+
+          # Create install.bat
+          $batContent = @'
           @echo off
           setlocal enabledelayedexpansion
           title Claude Code Offline Updater
-
-          :: 检查管理员权限（覆盖 Program Files 等目录时可能需要）
-          net session >nul 2>&1
-          if %errorlevel% neq 0 (
-              echo 正在请求管理员权限...
-              powershell -Command "Start-Process '%~f0' -Verb RunAs"
-              exit /b
-          )
-
           echo ============================================
           echo   Claude Code Offline Updater
           echo ============================================
           echo.
-
-          :: 确定 claude 安装目录
           set "INSTALL_DIR=%USERPROFILE%\.local\bin"
-
-          :: 如果命令行参数指定了路径则使用参数
           if not "%~1"=="" set "INSTALL_DIR=%~1"
-
-          echo 安装目录: %INSTALL_DIR%
+          echo Install to: %INSTALL_DIR%
           echo.
-
-          :: 停止正在运行的 claude 进程
           tasklist /FI "IMAGENAME eq claude.exe" 2>NUL | find /I "claude.exe" >NUL
           if !errorlevel! equ 0 (
-              echo 正在关闭运行中的 claude.exe ...
+              echo Stopping running claude.exe ...
               taskkill /F /IM claude.exe >NUL 2>&1
               timeout /t 2 /nobreak >NUL
           )
-
-          :: 创建临时目录
-          set "TMP_DIR=%TEMP%\claude_update_%RANDOM%"
-          mkdir "%TMP_DIR%"
-
-          :: 使用 PowerShell 解压（7z 自解压已处理，这里处理纯 zip）
-          :: 如果当前目录有 claude-win32-x64.zip 则解压它
-          set "ZIP_PATH=%~dp0claude-win32-x64.zip"
-          if exist "%ZIP_PATH%" (
-              echo 正在解压文件...
-              powershell -Command "Expand-Archive -Path '%ZIP_PATH%' -DestinationPath '%TMP_DIR%' -Force"
-          ) else (
-              echo [错误] 未找到 claude-win32-x64.zip
-              echo 请确保 claude-win32-x64.zip 与本程序在同一目录
-              pause
-              exit /b 1
-          )
-
-          :: 确保安装目录存在
           if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
-
-          :: 备份旧版本
           if exist "%INSTALL_DIR%\claude.exe" (
-              echo 备份旧版本...
+              echo Backing up old version...
               copy /Y "%INSTALL_DIR%\claude.exe" "%INSTALL_DIR%\claude.exe.bak" >NUL
           )
-
-          :: 复制新文件
-          echo 正在安装新版本...
-          copy /Y "%TMP_DIR%\claude.exe" "%INSTALL_DIR%\claude.exe" >NUL 2>&1
+          echo Installing new version...
+          copy /Y "%~dp0claude.exe" "%INSTALL_DIR%\claude.exe" >NUL 2>&1
           if !errorlevel! neq 0 (
-              echo [错误] 文件复制失败！正在恢复备份...
-              if exist "%INSTALL_DIR%\claude.exe.bak" (
-                  copy /Y "%INSTALL_DIR%\claude.exe.bak" "%INSTALL_DIR%\claude.exe" >NUL
-              )
+              echo ERROR: Copy failed! Restoring backup...
+              if exist "%INSTALL_DIR%\claude.exe.bak" copy /Y "%INSTALL_DIR%\claude.exe.bak" "%INSTALL_DIR%\claude.exe" >NUL
               pause
               exit /b 1
           )
-
-          :: 清理临时文件
-          rd /s /q "%TMP_DIR%" 2>NUL
-
-          :: 验证安装
+          echo.
           if exist "%INSTALL_DIR%\claude.exe" (
-              echo.
               echo ============================================
               for /f "tokens=*" %%v in ('"%INSTALL_DIR%\claude.exe" --version 2^>NUL') do set "VER=%%v"
-              echo   安装成功！版本: %VER%
-              echo   安装路径: %INSTALL_DIR%\claude.exe
+              echo   Success! Version: !VER!
+              echo   Path: %INSTALL_DIR%\claude.exe
               echo ============================================
           ) else (
-              echo.
-              echo [错误] 安装后未找到 claude.exe，请手动检查
+              echo ERROR: claude.exe not found after install
           )
-
           echo.
           pause
-          '@ | Out-File -FilePath install.bat -Encoding ASCII
+          '@
+          Set-Content -Path staging\install.bat -Value $batContent -Encoding ASCII
 
-      - name: Build self-extracting exe (7-Zip SFX)
-        if: env.SKIP_BUILD == 'false'
-        shell: pwsh
-        run: |
-          # 安装 7zip
-          choco install 7zip -y --no-progress
-          $sevenZip = "C:\Program Files\7-Zip\7z.exe"
-
-          # 下载 7-Zip SFX 模块
-          Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2301-extra.7z" -OutFile 7z-extra.7z
-          & $sevenZip x 7z-extra.7z -o7z-extra -y
-
-          # 创建打包目录
-          $staging = "staging"
-          New-Item -ItemType Directory -Path $staging -Force
-          Copy-Item "claude-win32-x64.zip" "$staging\"
-          Copy-Item "install.bat" "$staging\"
-
-          # 创建 SFX 配置
-          @"
+          # Create SFX config
+          $sfxConfig = @"
           ;!@Install@!UTF-8!
           Title="Claude Code $env:LATEST_VERSION Offline Updater"
-          BeginPrompt="即将更新 Claude Code 到 $env:LATEST_VERSION，是否继续？"
+          BeginPrompt="Update Claude Code to $env:LATEST_VERSION ?"
           RunProgram="install.bat"
           ;!@InstallEnd@!
-          "@ | Out-File -FilePath sfx_config.txt -Encoding ASCII
+          "@
+          Set-Content -Path sfx_config.txt -Value $sfxConfig -Encoding ASCII
 
-          # 构建 SFX exe
+          # Build 7z archive
+          & $sevenZip a -t7z payload.7z .\staging\* -mx5
+
+          # Combine SFX module + config + archive into exe
           $sfxModule = "7z-extra\7z.sfx"
-          $archive = "payload.7z"
           $output = "claude-code-${env:LATEST_VERSION}-win-x64-updater.exe"
+          $combined = [System.IO.File]::ReadAllBytes($sfxModule) + [System.IO.File]::ReadAllBytes("sfx_config.txt") + [System.IO.File]::ReadAllBytes("payload.7z")
+          [System.IO.File]::WriteAllBytes($output, $combined)
 
-          & $sevenZip a -t7z $archive ".\$staging\*" -mx5
-          cmd /c "copy /b `"$sfxModule`" + `"sfx_config.txt`" + `"$archive`" `"$output`""
-
-          Write-Host "Built: $output"
           $size = (Get-Item $output).Length / 1MB
-          Write-Host ("Size: {0:N1} MB" -f $size)
+          Write-Host "Built: $output ($([math]::Round($size,1)) MB)"
 
-          echo "UPDATER_EXE=$output" >> $env:GITHUB_ENV
+          "UPDATER_EXE=$output" >> $env:GITHUB_ENV
 
-      - name: Create/Update Release
+      - name: Create Release
         if: env.SKIP_BUILD == 'false'
         shell: pwsh
         env:
@@ -209,23 +158,19 @@ jobs:
         run: |
           $tag = "v${env:LATEST_VERSION}-updater"
           $title = "Claude Code ${env:LATEST_VERSION} Offline Updater (Win x64)"
+          $notes = @"
+          ## Claude Code ${env:LATEST_VERSION} Offline Updater (Windows x64)
 
-          # 创建 release
-          gh release create $tag $env:UPDATER_EXE `
-            --repo $env:GITHUB_REPOSITORY `
-            --title $title `
-            --notes "## Claude Code ${env:LATEST_VERSION} 离线更新包 (Windows x64)
+          ### Usage
+          1. Download ``claude-code-${env:LATEST_VERSION}-win-x64-updater.exe``
+          2. Double-click to run
+          3. Confirm the prompt - update completes automatically
+          4. Installed to ``%USERPROFILE%\.local\bin\claude.exe``
 
-### 使用方法
-1. 下载 ``claude-code-${env:LATEST_VERSION}-win-x64-updater.exe``
-2. 双击运行
-3. 确认提示后自动完成更新
-4. 更新完成后会在 ``%USERPROFILE%\.local\bin\claude.exe`` 验证版本
+          ### Contents
+          - claude.exe v${env:LATEST_VERSION} (SHA256 verified)
+          - Built: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+          "@
 
-### 包含内容
-- claude.exe (v${env:LATEST_VERSION})
-- SHA256 已校验
-
-构建时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-
+          gh release create $tag $env:UPDATER_EXE --repo $env:GITHUB_REPOSITORY --title $title --notes $notes
           Write-Host "Release created: $tag"
