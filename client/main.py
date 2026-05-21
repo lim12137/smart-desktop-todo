@@ -114,7 +114,13 @@ def main():
         app = ClientApp()
         app.run()
     except Exception as e:
-        messagebox.showerror("错误", f"应用启动失败: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            messagebox.showerror("错误", f"应用启动失败:\n{e}")
+        except Exception:
+            pass
+        input("按回车键退出...")
         sys.exit(1)
 
 
