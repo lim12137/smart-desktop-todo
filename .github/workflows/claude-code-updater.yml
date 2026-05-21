@@ -245,7 +245,7 @@ jobs:
           Set-Content -Path updater.csproj -Value $csproj -Encoding UTF8
 
           # Publish single-file exe
-          dotnet publish updater.csproj -c Release -r win-x64 -o publish /p:PublishSingleFile=true /p:SelfContained=false
+          dotnet publish updater.csproj -c Release -r win-x64 -o publish
 
           $output = "claude-code-${ver}-win-x64-updater.exe"
           Copy-Item "publish\claude-code-updater.exe" $output
