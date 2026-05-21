@@ -73,10 +73,19 @@ jobs:
           Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2301-extra.7z" -OutFile 7z-extra.7z
           & $sevenZip x 7z-extra.7z -o7z-extra -y
 
+          # List extracted files to find the correct SFX module
+          Write-Host "Files in 7z-extra:"
+          Get-ChildItem -Path 7z-extra -Recurse | ForEach-Object { Write-Host "  $($_.FullName)" }
+
+          # Find SFX module - prefer 7z.sfx, fallback to first .sfx found
+          $sfxModule = Get-ChildItem -Path 7z-extra -Filter "*.sfx" | Select-Object -First 1
+          if (-not $sfxModule) { Write-Error "No .sfx file found in 7z-extra!"; exit 1 }
+          Write-Host "Using SFX module: $($sfxModule.FullName)"
+
           # Create staging dir
           New-Item -ItemType Directory -Path staging -Force
 
-          # Extract claude exe from zip so we can bundle it directly
+          # Extract claude exe from zip
           Expand-Archive -Path claude-win32-x64.zip -DestinationPath staging -Force
 
           # Create install.bat
@@ -140,10 +149,9 @@ jobs:
           & $sevenZip a -t7z payload.7z .\staging\* -mx5
 
           # Combine SFX module + config + archive into exe
-          $sfxModule = "7z-extra\7z.sfx"
           $output = "claude-code-${env:LATEST_VERSION}-win-x64-updater.exe"
-          $combined = [System.IO.File]::ReadAllBytes($sfxModule) + [System.IO.File]::ReadAllBytes("sfx_config.txt") + [System.IO.File]::ReadAllBytes("payload.7z")
-          [System.IO.File]::WriteAllBytes($output, $combined)
+          $bytes = [System.IO.File]::ReadAllBytes($sfxModule.FullName) + [System.IO.File]::ReadAllBytes("sfx_config.txt") + [System.IO.File]::ReadAllBytes("payload.7z")
+          [System.IO.File]::WriteAllBytes($output, $bytes)
 
           $size = (Get-Item $output).Length / 1MB
           Write-Host "Built: $output ($([math]::Round($size,1)) MB)"
